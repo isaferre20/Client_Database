@@ -4,16 +4,37 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 import streamlit as st
 from datetime import date
 from backend.client_data_backend import get_clients_by_search, get_interventi_by_client_id, db, InterventoDocument
-from services.document_service import generate_doc_iva10
-from services.document_service import generate_doc_iva4
+from frontend.services.document_service import generate_doc_iva10
+from frontend.services.document_service import generate_doc_iva4
 from backend.client_data_backend import app as flask_app
 from pathlib import Path
 import shutil
 import subprocess
 from pathlib import Path
-from navbar import navbar
+from frontend.navbar import navbar
+import pythoncom
+from win32com.client import Dispatch
+
+
 
 navbar()
+
+# Button to open IVA folder (top-right)
+with st.container():
+    col1, col2 = st.columns([1, 8])
+    with col1:
+        if st.button("📂 Apri Cartella IVA", key="open_iva_folder"):
+            try:
+                import subprocess
+                iva_folder_path = "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\IVA"
+                if os.name == 'nt':
+                    os.startfile(iva_folder_path)
+                elif os.name == 'posix':
+                    subprocess.Popen(["open", iva_folder_path])
+            except Exception as e:
+                st.error(f"❌ Errore nell'aprire la cartella IVA: {e}")
+
+
 from backend.client_data_backend import app as flask_app
 flask_app.app_context().push()
 
@@ -27,14 +48,23 @@ def get_next_filename(base_folder: Path, prefix: str, year: str, surname: str, n
     next_n = max(numbers, default=0) + 1
     return f"{prefix}{year}{next_n:03}_{surname}_{name}_{cf}.docx"
 
-import subprocess
-from pathlib import Path
+
+def create_windows_shortcut(target_path: Path, shortcut_path: Path):
+    pythoncom.CoInitialize()
+    shell = Dispatch('WScript.Shell')
+    shortcut = shell.CreateShortcut(str(shortcut_path))
+    shortcut.TargetPath = str(target_path)
+    shortcut.WorkingDirectory = str(target_path.parent)
+    shortcut.IconLocation = str(target_path)  # Optional
+    shortcut.save()
+
+
 
 def convert_with_libreoffice(docx_path, pdf_path):
     docx_path = Path(docx_path).resolve()
     output_dir = pdf_path.parent.resolve()
 
-    libreoffice_path = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+    libreoffice_path = "C:\\Program Files\\LibreOffice\\program\\soffice"
 
     try:
         result = subprocess.run(
@@ -57,7 +87,7 @@ def convert_with_libreoffice(docx_path, pdf_path):
 def save_doc_and_link(doc, iva_type, client, intervento):
     from datetime import datetime
 
-    iva_dir = Path("IVA")
+    iva_dir = Path("Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\IVA")
     iva_dir.mkdir(exist_ok=True)
 
     data_lavori = intervento.data_lavori
@@ -86,22 +116,31 @@ def save_doc_and_link(doc, iva_type, client, intervento):
         print(f"❌ Errore nella conversione: {e}")
         raise RuntimeError("Conversione PDF fallita.")
 
-    # Create final destination folder
-    intervento_folder = Path(f"DOCUMENTAZIONE_CLIENTI/{client.cognome}_{client.nome}_{client.codice_fiscale}/intervento_{intervento.id}")
+    # Percorso assoluto alla base DOCUMENTAZIONE_CLIENTI
+    base_dir = Path(__file__).resolve().parents[2]
+    document_folder = Path("Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\DOCUMENTAZIONE_CLIENTI")
+
+    intervento_folder = document_folder / f"{client.cognome}_{client.nome}_{client.codice_fiscale}" / f"intervento_{intervento.id}"
     intervento_folder.mkdir(parents=True, exist_ok=True)
-    link_path = intervento_folder / pdf_path.name
+
+    # Percorso dove vuoi salvare il collegamento
+    shortcut_path = intervento_folder / f"{pdf_path.name}.lnk"
+    create_windows_shortcut(pdf_path.resolve(), shortcut_path)
 
     try:
-        if link_path.exists() or link_path.is_symlink():
-            link_path.unlink()
-        link_path.symlink_to(pdf_path.resolve())
+        if shortcut_path.exists():
+            shortcut_path.unlink()
+        create_windows_shortcut(pdf_path.resolve(), shortcut_path)
+        print(f"✅ Collegamento creato: {shortcut_path}")
     except Exception as e:
-        print(f"⚠️ Symlink non riuscito ({e}), copio il file invece.")
-        shutil.copy(doc_path, link_path)
+        print(f"❌ Errore nella creazione del collegamento .lnk: {e}")
+        raise RuntimeError("❌ Impossibile creare il collegamento al PDF.")
+
+    subprocess.run(['explorer', intervento_folder.resolve()])
 
     # Save link in DB
     doc_record = InterventoDocument(
-        doc_url=str(link_path),
+        doc_url=str(shortcut_path),
         intervento_id=intervento.id,
         file_name=filename
     )
@@ -287,7 +326,7 @@ if search_query:
                         if not (titolo_abitativo and num_pratica and cod_pratica):
                             st.error("⚠️ Compila tutti i campi per il certificato IVA 4%.")
                         else:
-                            from services.document_service import generate_doc_iva4
+                            from frontend.services.document_service import generate_doc_iva4
 
                             pratica_data = {"numero": num_pratica, "codice": cod_pratica}
                             intervento_data_4 = {
@@ -305,7 +344,7 @@ if search_query:
                                 data_intervento.strftime("%d/%m/%Y"),
                                 pratica_data,
                                 checkboxes,
-                                template_path=f"templates_docs/{selected_template_file}"
+                                template_path=f"Z:\Documents\Lavori Idraulica\Isa uso ufficio\\Client_DB\\Client_Database\\templates_docs\\{selected_template_file}"
                             )
 
                             file_path = save_doc_and_link(doc, iva_type="4", client=client, intervento=intervento_selected)
@@ -325,7 +364,7 @@ if search_query:
                             tipo_intervento,
                             data_intervento.strftime("%d/%m/%Y"),
                             intervento_data,
-                            template_path=f"templates_docs/{selected_template_file}"
+                            template_path=f"Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\Client_Database\\templates_docs\\{selected_template_file}"
                         )
 
                         file_path = save_doc_and_link(doc, iva_type="10", client=client, intervento=intervento_selected)

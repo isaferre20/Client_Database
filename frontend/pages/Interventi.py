@@ -5,17 +5,16 @@ import os
 import base64
 import pandas as pd
 from datetime import date
-from streamlit_extras.switch_page_button import switch_page
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../backend")))
 from client_data_backend import db, Client, Intervento, ClientDocument, app, serve_document
-from navbar import navbar
+from frontend.navbar import navbar
 from client_data_backend import db, Intervento, InterventoDocument, Client, app
 
 navbar()
 app.app_context().push()
 
-DOCUMENTS_FOLDER = "/Users/isabellaferrero/Politecnico Di Torino Studenti Dropbox/Isabella Ferrero/Mac/Desktop/Idraulica Baretta/Database Clienti_2/DOCUMENTAZIONE_CLIENTI"
+DOCUMENTS_FOLDER = "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\DOCUMENTAZIONE_CLIENTI"
 
 def safe_filename(name):
     return "_".join(name.strip().split()).replace("/", "_").replace("\\", "_")
@@ -60,13 +59,26 @@ def update_intervento_form(intervento, form_data):
     db.session.commit()
 
 def delete_intervento(intervento_id):
-    folder = os.path.join(DOCUMENTS_FOLDER, f"intervento_{intervento_id}")
+    intervento = Intervento.query.get(intervento_id)
+    if not intervento:
+        return
+
+    client = Client.query.get(intervento.client_id)
+    if not client:
+        return
+
+    folder = get_intervento_folder(client, intervento_id)  # <- Use this function
+
     if os.path.exists(folder):
         import shutil
         shutil.rmtree(folder)
+
     InterventoDocument.query.filter_by(intervento_id=intervento_id).delete()
     Intervento.query.filter_by(id=intervento_id).delete()
     db.session.commit()
+    db.session.close()
+
+
 
 def get_clients():
     return Client.query.all()
@@ -232,7 +244,7 @@ else:
                             subprocess.Popen(["open", folder_path])
                     except Exception as e:
                         st.error(f"❌ Errore nell'aprire la cartella: {e}")
-            tab_mod, tab_docs, tab_del = st.tabs(["✏️ Modifica", "📎 Documenti", "🗑️ Elimina"])
+            tab_mod, tab_docs = st.tabs(["✏️ Modifica", "📎 Documenti"])
 
             with tab_mod:
                 with st.form("edit_intervento"):
@@ -366,36 +378,3 @@ else:
                                 st.image(file_bytes, caption=filename, use_container_width=True)
                             else:
                                 st.info("⚠️ Questo tipo di file non può essere visualizzato direttamente.")
-
-
-            with tab_del:
-                st.warning("⚠️ Questa azione è irreversibile: tutti i documenti saranno eliminati.")
-
-                if not st.session_state.get("confirm_delete_intervento", False):
-                    if st.button("❌ Conferma Eliminazione Intervento"):
-                        st.session_state["confirm_delete_intervento"] = True
-                else:
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        if st.button("🗑️ Sì, elimina"):
-                            intervento = Intervento.query.get(selected_id)
-                            if intervento:
-                                try:
-                                    client = Client.query.get(intervento.client_id)
-                                    client_folder = f"{client.cognome}_{client.nome}_{client.codice_fiscale}"
-                                    client_folder_safe = safe_filename(client_folder)
-                                    folder_path = os.path.join(DOCUMENTS_FOLDER, client_folder_safe, f"intervento_{selected_id}")
-                                    import shutil
-                                    if os.path.exists(folder_path):
-                                        shutil.rmtree(folder_path)
-                                    InterventoDocument.query.filter_by(intervento_id=selected_id).delete()
-                                    db.session.delete(intervento)
-                                    db.session.commit()
-                                    st.success("✅ Intervento e documenti eliminati.")
-                                    st.session_state["confirm_delete_intervento"] = False
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Errore durante l'eliminazione: {e}")
-                    with col4:
-                        if st.button("Annulla"):
-                            st.session_state["confirm_delete_intervento"] = False

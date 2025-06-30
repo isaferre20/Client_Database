@@ -11,10 +11,28 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 
 from backend.client_data_backend import get_clients_by_search, get_interventi_by_client_id, db, InterventoDocument
 from backend.client_data_backend import app as flask_app
-from services.document_service import generate_doc_dico
-from navbar import navbar
+from frontend.services.document_service import generate_doc_dico
+from frontend.navbar import navbar
+import pythoncom
+from win32com.client import Dispatch
 
 navbar()
+
+# Button to open folder (top-right)
+with st.container():
+    col1, col2 = st.columns([1, 8])
+    with col1:
+        if st.button("📂 Apri Cartella DICO", key="open_iva_folder"):
+            try:
+                import subprocess
+                iva_folder_path = "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\DICO"
+                if os.name == 'nt':
+                    os.startfile(iva_folder_path)
+                elif os.name == 'posix':
+                    subprocess.Popen(["open", iva_folder_path])
+            except Exception as e:
+                st.error(f"❌ Errore nell'aprire la cartella DICO: {e}")
+
 flask_app.app_context().push()
 
 def get_next_dico_number(base_folder: Path, year: str) -> str:
@@ -32,7 +50,7 @@ def convert_with_libreoffice(docx_path, pdf_path):
     docx_path = Path(docx_path).resolve()
     output_dir = pdf_path.parent.resolve()
 
-    libreoffice_path = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+    libreoffice_path = "C:\\Program Files\\LibreOffice\\program\\soffice"
 
     try:
         subprocess.run(
@@ -46,8 +64,18 @@ def convert_with_libreoffice(docx_path, pdf_path):
         raise RuntimeError(f"Errore nella conversione con LibreOffice: {e}")
 
 
+def create_windows_shortcut(target_path: Path, shortcut_path: Path):
+    import pythoncom
+    pythoncom.CoInitialize()  # Inizializza il threading COM
+    shell = Dispatch('WScript.Shell')
+    shortcut = shell.CreateShortcut(str(shortcut_path))
+    shortcut.TargetPath = str(target_path)
+    shortcut.WorkingDirectory = str(target_path.parent)
+    shortcut.IconLocation = str(target_path)
+    shortcut.save()
+
 def save_doc_and_link(doc, dico_number, client, intervento):
-    dico_dir = Path("DICO")
+    dico_dir = Path("Z:/Documents/Lavori Idraulica/Isa uso ufficio/Client_DB/DICO")
     dico_dir.mkdir(exist_ok=True)
 
     filename = f"cc{dico_number}_{client.cognome}_{client.nome}_{client.codice_fiscale}.docx"
@@ -57,16 +85,18 @@ def save_doc_and_link(doc, dico_number, client, intervento):
     pdf_path = doc_path.with_suffix(".pdf")
     convert_with_libreoffice(doc_path, pdf_path)
 
-    intervento_folder = Path(f"DOCUMENTAZIONE_CLIENTI/{client.cognome}_{client.nome}_{client.codice_fiscale}/intervento_{intervento.id}")
+    intervento_folder = Path(f"Z:/Documents/Lavori Idraulica/Isa uso ufficio/Client_DB/DOCUMENTAZIONE_CLIENTI/{client.cognome}_{client.nome}_{client.codice_fiscale}/intervento_{intervento.id}")
     intervento_folder.mkdir(parents=True, exist_ok=True)
-    link_path = intervento_folder / pdf_path.name
+
+    link_path = intervento_folder / (pdf_path.name + ".lnk")  # Create .lnk shortcut
 
     try:
         if link_path.exists():
             link_path.unlink()
-        link_path.symlink_to(pdf_path.resolve())
-    except:
-        shutil.copy(pdf_path, link_path)
+        create_windows_shortcut(pdf_path.resolve(), link_path)
+    except Exception as e:
+        print(f"❌ Errore nella creazione del collegamento .lnk: {e}")
+        raise RuntimeError("❌ Impossibile creare il collegamento al PDF.")
 
     doc_record = InterventoDocument(
         doc_url=str(link_path),
@@ -169,11 +199,15 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # --- UI ---
-st.markdown("<h2>📄 Genera Dichiarazione DICO</h2>", unsafe_allow_html=True)
+st.markdown("<h2>📄 Genera Dichiarazione di Conformità</h2>", unsafe_allow_html=True)
 tipo_impianto_options = {
         "Boiler Gas": {
             "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiali a norma D.M. 37/08 - UNI 7129:2015 – Marcatura CE;",
             "descrizione": "sostituzione di boiler esistente con nuovo {{MODELLO_CALDAIA}} a gas metano (fam. 2) di tipo C installato in locale areato. \nEseguita prova di tenuta gas."
+        },
+        "Boiler Gas (Scarico a parete)": {
+            "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiali a norma D.M. 37/08 - UNI 7129:2015 – Marcatura CE;",
+            "descrizione": "sostituzione di boiler esistente con nuovo {{MODELLO_CALDAIA}} a gas metano (fam. 2) di tipo C installato in locale areato, con scarico fumi a parete."
         },
         "Caldaia Parete": {
             "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiali a norma D.M. 37/08 - UNI 7129 – Marcatura CE;",
@@ -183,13 +217,9 @@ tipo_impianto_options = {
             "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiali a norma D.M. 37/08 - UNI 7129 – Marcatura CE;",
             "descrizione": "sostituzione caldaia esistente con nuova caldaia a condensazione {{MODELLO_CALDAIA}} e relativi componenti d’impianto, comprese le opere per l’adduzione dell’aria comburente, evacuazione dei prodotti di combustione e scarico condensa; \n-installazione di dispositivo di termoregolazione evoluto (es. V) IMMERGAS CAR V2 e di valvole termostatiche su ciascun radiatore."
         },
-        "Tubazione gas": {
-            "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiali a norma D.M. 37/08 - UNI 7129 – Marcatura CE;",
-            "descrizione": "Rifacimento tubazione di alimentazione gas metano (fam. 2), a partire dal contatore fino al collegamento di scaldacqua e piano cottura completo di rubinetto di intercettazione esterno, eseguito con tubo in rame a vista. \nEseguita prova di tenuta gas."
-        },
-        "Boiler Gas (Scarico a parete)": {
-            "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiali a norma D.M. 37/08 - UNI 7129:2015 – Marcatura CE;",
-            "descrizione": "sostituzione di boiler esistente con nuovo {{MODELLO_CALDAIA}} a gas metano (fam. 2) di tipo C installato in locale areato, con scarico fumi a parete."
+        "Canne fumarie": {
+            "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiale a norma Legge D.M. 37/08 - UNI EN 378 e s.m.i. – CEI 64-8",
+            "descrizione": "Intubamento di canna fumaria con tubazione flessibile in acciaio inox a doppia parete e raccorderia"
         },
         "Clima": {
             "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiale a norma Legge D.M.37/08 - UNI EN 378 e s.m.i. – CEI 64-8 – Marcatura CE;",
@@ -199,9 +229,9 @@ tipo_impianto_options = {
             "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiali a norma D.M. 37/08 - UNI 7129 – Marcatura CE;",
             "descrizione": "sostituzione caldaia esistente con nuova caldaia a condensazione {{MODELLO_CALDAIA}} e relativi componenti d’impianto, comprese le opere per l’adduzione dell’aria comburente, evacuazione dei prodotti di combustione e scarico condensa."
         },
-        "Canne fumarie": {
-            "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiale a norma Legge D.M. 37/08 - UNI EN 378 e s.m.i. – CEI 64-8",
-            "descrizione": "Intubamento di canna fumaria con tubazione flessibile in acciaio inox a doppia parete e raccorderia"
+        "Tubazione gas": {
+            "legge": "seguito la norma tecnica applicabile all’impiego (3) Materiali a norma D.M. 37/08 - UNI 7129 – Marcatura CE;",
+            "descrizione": "Rifacimento tubazione di alimentazione gas metano (fam. 2), a partire dal contatore fino al collegamento di scaldacqua e piano cottura completo di rubinetto di intercettazione esterno, eseguito con tubo in rame a vista. \nEseguita prova di tenuta gas."
         }
     }
 
@@ -270,7 +300,7 @@ if search_query:
                         }
 
                         doc = generate_doc_dico(
-                            template_path="templates_docs/modello_DICO.docx",
+                            template_path="Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\Client_Database\\templates_docs\\modello_DICO.docx",
                             numero=dico_number,
                             data_doc=data_doc.strftime("%d/%m/%Y"),
                             descrizione=descrizione,

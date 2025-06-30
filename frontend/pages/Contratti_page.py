@@ -4,7 +4,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 
 from backend.client_data_backend import app as flask_app
 flask_app.app_context().push()
-
+import base64
 from datetime import datetime
 import os
 import pandas as pd
@@ -24,12 +24,31 @@ from backend.client_data_backend import app as flask_app, get_clients_by_search,
 from pathlib import Path
 import shutil
 
+import pythoncom
+from win32com.client import Dispatch
+
 locale.setlocale(locale.LC_TIME, 'it_IT.UTF-8')
 flask_app.app_context().push()
 
-from navbar import navbar
+from frontend.navbar import navbar
 
 navbar()
+
+# Button to open IVA folder (top-right)
+with st.container():
+    col1, col2 = st.columns([2, 8])
+    with col1:
+        if st.button("📂 Apri Cartella CONTRATTI", key="open_iva_folder"):
+            try:
+                import subprocess
+                iva_folder_path = "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\CONTRATTI"
+                if os.name == 'nt':
+                    os.startfile(iva_folder_path)
+                elif os.name == 'posix':
+                    subprocess.Popen(["open", iva_folder_path])
+            except Exception as e:
+                st.error(f"❌ Errore nell'aprire la cartella CONTRATTI: {e}")
+
 st.markdown(f"""
 <style>
     html, body {{
@@ -121,8 +140,8 @@ st.markdown(f"""
 
 
 TEMPLATE_PATHS = {
-    "MANUTENZIONE (cm)": "templates_docs/MANUT.docx",
-    "Contratto 3RESP + MANUTENZIONE (crm)": "templates_docs/MANUT_3RESP.docx"
+    "MANUTENZIONE (cm)": "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\Client_Database\\templates_docs\\MANUT.docx",
+    "Contratto 3RESP + MANUTENZIONE (crm)": "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\\\Client_DB\\Client_Database\\templates_docs\\MANUT_3RESP.docx"
 }
 
 # --- UTILS ---
@@ -134,6 +153,22 @@ def sanitize_filename(name):
 
 def validate_cf_piva(value): value = value.strip(); return (len(value)==16 and value.isalnum()) or (len(value)==11 and value.isdigit())
 def is_valid_email(email): return bool(re.match(r".+@.+\..+", email.strip()))
+
+def parse_date(value):
+    if pd.isna(value):
+        return None
+    if isinstance(value, str):
+        try:
+            return datetime.strptime(value, "%d/%m/%Y")
+        except ValueError:
+            try:
+                return datetime.fromisoformat(value)
+            except:
+                return None
+    elif isinstance(value, datetime):
+        return value
+    return None
+
 
 def format_date(date_value):
     try: return pd.to_datetime(date_value, dayfirst=True).strftime('%d %B %Y')
@@ -191,13 +226,23 @@ def conditional_block(doc, tot_pot):
 
 
 def get_next_contract_filename(prefix, year, ente):
-    tag = f"{prefix}{year}"
-    allc = Contract.query.filter(Contract.contract_url.contains(f"/{tag}")).all()
-    nums = [int(Path(c.contract_url).stem[len(prefix)+2:len(prefix)+5]) for c in allc if Path(c.contract_url).stem[len(prefix)+2:len(prefix)+5].isdigit()]
-    return f"{tag}{max(nums,default=0)+1:03}_{sanitize_filename(ente)}"
+    tag = f"{prefix}{year}"  # e.g., cm25
+    all_contracts = Contract.query.all()
+
+    pattern = re.compile(rf"{tag}(\d{{3}})")  # cm25 + 3 digits
+    nums = []
+    for c in all_contracts:
+        if c.contract_url:
+            match = pattern.search(Path(c.contract_url).stem)
+            if match:
+                nums.append(int(match.group(1)))
+
+    next_number = max(nums, default=0) + 1
+    return f"{tag}{next_number:03}_{sanitize_filename(ente)}"
+
 
 def convert_to_pdf(docx_path, outdir):
-    libreoffice_path = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+    libreoffice_path = "C:\\Program Files\\LibreOffice\\program\\soffice"
     subprocess.run([libreoffice_path, "--headless", "--convert-to", "pdf", str(docx_path), "--outdir", str(outdir)], check=True)
 
 from pathlib import Path
@@ -252,17 +297,24 @@ def generate_new_contract_filename(prefix, year, ente, old_suffix=None):
 from docx import Document
 
 def replace_immobili_placeholder(doc, immobili):
-    for para in doc.paragraphs:
+    for i, para in enumerate(doc.paragraphs):
         if '{{IMMOBILI}}' in para.text:
-            # Cancella il paragrafo del placeholder
-            p = para._element
-            parent = p.getparent()
-            parent.remove(p)
+            # Save the location
+            p_element = para._element
+            parent = p_element.getparent()
+            index = parent.index(p_element)
 
-            # Inserisci qui la tabella per ogni immobile
+            # Remove placeholder paragraph
+            parent.remove(p_element)
+
             for imm_idx, immobile in enumerate(immobili):
-                # Titolo immobile
-                titolo = f"Immobile {imm_idx+1}: {immobile['indirizzo']} - Proprietà: {immobile['proprieta']} - Occupante: {immobile['occupante']}"
+                # Add title paragraph
+                title = f"Immobile {imm_idx+1}: {immobile['indirizzo']} - Proprietà: {immobile['proprieta']} - Occupante: {immobile['occupante']}"
+                new_para = doc.add_paragraph(title)
+                parent.insert(index, new_para._element)
+                index += 1
+
+                # Add table
                 table = doc.add_table(rows=1, cols=7)
                 table.style = 'Table Grid'
                 hdr_cells = table.rows[0].cells
@@ -283,11 +335,11 @@ def replace_immobili_placeholder(doc, immobili):
                     row_cells[4].text = str(unita.get("dico_diri", ""))
                     row_cells[5].text = str(unita.get("data_dico_diri", ""))
                     row_cells[6].text = str(unita.get("codice_impianto", ""))
-                
-                # Inserisci anche il titolo prima della tabella
-                doc.add_paragraph(titolo)
-            break  # esci dopo il primo match
 
+                # Insert table element
+                parent.insert(index, table._element)
+                index += 1
+            break
 
 # --- LAYOUT ---
 st.title("📝 Gestione Contratti")
@@ -487,10 +539,10 @@ if selected_tab == tabs[0]:
                                 replace_immobili_placeholder(doc, st.session_state.get("immobili", []))
                             # --- Salvataggio file ---
                             year = pd.to_datetime(dati.get('data_doc'), dayfirst=True).strftime('%y')
-                            folder = Path("CONTRATTI") / f"{sanitize_filename(client.cognome)}_{sanitize_filename(client.nome)}_{client.codice_fiscale}"
+                            folder = Path("Z:/Documents/Lavori Idraulica/Isa uso ufficio/Client_DB/CONTRATTI") / f"{sanitize_filename(client.cognome)}_{sanitize_filename(client.nome)}_{client.codice_fiscale}"
                             folder.mkdir(parents=True, exist_ok=True)
                             prefix = "cm" if model=="MANUTENZIONE (cm)" else "crm"
-                            filename_code = get_next_contract_filename(prefix, year, dati.get('ente'))
+                            filename_code = get_next_contract_filename(prefix, year, f"{client.cognome}_{client.nome}_{client.codice_fiscale}")
                             docx_path = folder / f"{filename_code}.docx"
                             pdf_path = docx_path.with_suffix(".pdf")
 
@@ -510,11 +562,12 @@ if selected_tab == tabs[0]:
                                         if digits:
                                             old_suffix = digits[-1]
 
-                                    filename_code = f"{get_next_contract_filename(prefix, year, dati.get('ente'))}_rev{old_suffix}"
+                                    filename_code = f"{get_next_contract_filename(prefix, year, f"{client.cognome}_{client.nome}_{client.codice_fiscale}")}_rev{old_suffix}"
                                 else:
-                                    filename_code = get_next_contract_filename(prefix, year, dati.get('ente'))
+                                    filename_code = get_next_contract_filename(prefix, year, f"{client.cognome}_{client.nome}_{client.codice_fiscale}")
                             else:
-                                filename_code = get_next_contract_filename(prefix, year, dati.get('ente'))
+                                filename_code = get_next_contract_filename(prefix, year, f"{client.cognome}_{client.nome}_{client.codice_fiscale}")
+                            
 
                             docx_path = folder / f"{filename_code}.docx"
                             pdf_path = docx_path.with_suffix(".pdf")
@@ -524,17 +577,27 @@ if selected_tab == tabs[0]:
 
                             # Usa lo stesso path corretto per DOCUMENTAZIONE_CLIENTI
                             cliente_folder_name = f"{sanitize_filename(client.cognome)}_{sanitize_filename(client.nome)}_{client.codice_fiscale}"
-                            link_folder = Path("DOCUMENTAZIONE_CLIENTI") / cliente_folder_name / "CONTRATTI"
+                            link_folder = Path("Z:/Documents/Lavori Idraulica/Isa uso ufficio/Client_DB/DOCUMENTAZIONE_CLIENTI") / cliente_folder_name / "CONTRATTI"
                             link_folder.mkdir(parents=True, exist_ok=True)
                             link_path = link_folder / pdf_path.name
 
                             if link_path.exists() or link_path.is_symlink():
                                 link_path.unlink()
 
-                            try:
-                                link_path.symlink_to(pdf_path.resolve())
-                            except Exception:
-                                shutil.copy2(pdf_path, link_path)
+                            import pythoncom
+                            from win32com.client import Dispatch
+
+                            def create_windows_shortcut(target, shortcut_path):
+                                pythoncom.CoInitialize()  # ✅ Required to use COM
+                                shell = Dispatch('WScript.Shell')
+                                shortcut = shell.CreateShortcut(str(shortcut_path))
+                                shortcut.TargetPath = str(target)
+                                shortcut.WorkingDirectory = str(target.parent)
+                                shortcut.save()
+                            # inside your logic
+                            shortcut_path = link_folder / (pdf_path.stem + ".lnk")
+                            create_windows_shortcut(pdf_path.resolve(), shortcut_path)
+
 
                             # salva in DB...
                             new_contract = Contract(
@@ -547,6 +610,7 @@ if selected_tab == tabs[0]:
                             )
                             db.session.add(new_contract)
                             db.session.commit()
+                            db.session.close()
                             st.success(f"✅ Contratto generato e salvato: {pdf_path.name}")
 
         else: st.warning("⚠ Nessun cliente trovato.")
@@ -555,11 +619,15 @@ if selected_tab == tabs[1]:
     st.markdown("### 📄 Visualizza Contratti")
 
     # 1) Load & normalize contracts
-    contracts = (
+    try:
+        contracts = (
         db.session.query(Contract, Client)
                  .join(Client, Contract.client_id == Client.id)
                  .all()
-    )
+        )
+    finally:
+        db.session.close()
+
     rows = []
     for c, client in contracts:
         # normalize data_ultima_ft into a Python date or None
@@ -577,6 +645,8 @@ if selected_tab == tabs[1]:
                     ultima_dt = datetime.strptime(raw, "%d/%m/%Y").date()
                 except ValueError:
                     ultima_dt = None
+            finally:
+                db.session.close()
 
         # compute next‐year as a Python date or None
         prossima_dt = ultima_dt.replace(year=ultima_dt.year + 1) if ultima_dt else None
@@ -589,21 +659,27 @@ if selected_tab == tabs[1]:
             "Fine Stagione": c.fine_stagione or "",
             "Totale Fatture (€)": f"{c.tot_ft or 0.0:.2f} €",
             # feed real dates
-            "Data Ultima FT": ultima_dt,
-            "Data Prossima FT": prossima_dt,
+            "Data Ultima FT": ultima_dt.isoformat() if ultima_dt else "",
+            "Data Prossima FT": prossima_dt.isoformat() if prossima_dt else "",
             "Tipo Contratto": c.contract_type,
             "Data Contratto": c.contract_date.strftime("%d %B %Y") if c.contract_date else "",
             "Percorso File": c.contract_url or ""
         })
 
     # 2) Build DataFrame
-    df = pd.DataFrame(rows)[
-        [
-            "ID","Cliente","Documento","Inizio Stagione","Fine Stagione",
-            "Totale Fatture (€)","Data Ultima FT","Data Prossima FT",
-            "Tipo Contratto","Data Contratto","Percorso File"
-        ]
-    ]
+    if rows:
+        df = pd.DataFrame(rows)[[
+            "ID", "Cliente", "Documento", "Inizio Stagione", "Fine Stagione",
+            "Totale Fatture (€)", "Data Ultima FT", "Data Prossima FT",
+            "Tipo Contratto", "Data Contratto", "Percorso File"
+        ]]
+    else:
+        df = pd.DataFrame(columns=[
+            "ID", "Cliente", "Documento", "Inizio Stagione", "Fine Stagione",
+            "Totale Fatture (€)", "Data Ultima FT", "Data Prossima FT",
+            "Tipo Contratto", "Data Contratto", "Percorso File"
+        ])
+
 
     # 3) Configure Ag-Grid
     gb = GridOptionsBuilder.from_dataframe(df)
@@ -618,13 +694,17 @@ if selected_tab == tabs[1]:
         headerName="📄 Contratto",
         cellRenderer=JsCode("""
             function(params) {
-                const path = params.data["Percorso File"];
-                return `<a href="file://${path}" target="_blank">${params.value}</a>`;
+                return params.value || "";
             }
         """)
     )
 
     # shared date‐column params
+    # Enable checkbox selection on rows
+    gb.configure_selection(selection_mode="multiple", use_checkbox=True)
+
+    # Data Ultima FT - date picker
+    # Data Ultima FT
     gb.configure_column(
         "Data Ultima FT",
         headerName="📅 Data Ultima FT",
@@ -641,29 +721,74 @@ if selected_tab == tabs[1]:
             function(params) {
                 if (!params.value) return '';
                 const d = new Date(params.value);
-                const dd = String(d.getDate()).padStart(2,'0');
-                const mm = String(d.getMonth()+1).padStart(2,'0');
-                const yyyy = d.getFullYear();
-                return dd + '/' + mm + '/' + yyyy;
-            }
-        """),
-        valueParser=JsCode("""
-            function(params) {
-                if (params.newValue instanceof Date) {
-                    return params.newValue.toISOString();
-                }
-                return params.newValue;
+                return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
             }
         """),
         valueSetter=JsCode("""
             function(params) {
-                params.data["Data Ultima FT"] = params.newValue;
+                let d = params.newValue;
+                if (typeof d === 'string') d = new Date(Date.parse(d));
+                if (!(d instanceof Date) || isNaN(d)) return false;
+
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                params.data["Data Ultima FT"] = `${yyyy}-${mm}-${dd}`;
+
+                const dpft_raw = params.data["Data Prossima FT"];
+                const dpft = new Date(dpft_raw);
+                if (!dpft_raw || !(dpft instanceof Date) || isNaN(dpft)) {
+                    const next = new Date(d);
+                    next.setFullYear(next.getFullYear() + 1);
+                    const yyyy2 = next.getFullYear();
+                    const mm2 = String(next.getMonth() + 1).padStart(2, '0');
+                    const dd2 = String(next.getDate()).padStart(2, '0');
+                    params.data["Data Prossima FT"] = `${yyyy2}-${mm2}-${dd2}`;
+                }
+
                 return true;
             }
         """),
         filter="agDateColumnFilter"
     )
 
+    # Data Prossima FT
+    gb.configure_column(
+    "Data Prossima FT",
+    headerName="📅 Data Prossima FT",
+    editable=True,
+    cellEditor="agDateCellEditor",
+    cellEditorPopup=True,
+    valueGetter=JsCode("""
+        function(params) {
+            const v = params.data["Data Prossima FT"];
+            return v ? new Date(v) : null;
+        }
+    """),
+    valueFormatter=JsCode("""
+        function(params) {
+            if (!params.value) return '';
+            const d = new Date(params.value);
+            return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+        }
+    """),
+    valueSetter=JsCode("""
+        function(params) {
+            let d = params.newValue;
+            if (typeof d === 'string') d = new Date(Date.parse(d));
+            if (!(d instanceof Date) || isNaN(d)) return false;
+
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            params.data["Data Prossima FT"] = `${yyyy}-${mm}-${dd}`;
+
+            return true;
+        }
+    """),
+    filter="agDateColumnFilter"
+)
+    
     grid_opts = gb.build()
 
     # 4) Render the grid
@@ -675,10 +800,9 @@ if selected_tab == tabs[1]:
         theme="streamlit",
         allow_unsafe_jscode=True,
         fit_columns_on_grid_load=True,
-        rowSelection="single",
-        use_checkbox=True,
+        rowSelection="multiple",  # ✅ allow multi-row selection
+        use_checkbox=True,        # ✅ show checkboxes in the first column
     )
-
 
     # 5) Pull back as DataFrame
     raw = grid_resp["data"]
@@ -686,36 +810,53 @@ if selected_tab == tabs[1]:
 
     # 6) Save button → parse & commit
     if st.button("💾 Salva Modifiche"):
+        def parse_any_date(val):
+            if pd.isna(val) or not val:
+                return None
+            if isinstance(val, datetime):
+                return val
+            if isinstance(val, str):
+                # ✅ Aggiorna l'ordine: metti prima il formato corretto "YYYY-MM-DD"
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%fZ"):
+                    try:
+                        return datetime.strptime(val, fmt)
+                    except ValueError:
+                        continue
+            return None
+
+
         updated_df = pd.DataFrame(grid_resp["data"])
-        updated_df["_ultima_ts"] = pd.to_datetime(updated_df["Data Ultima FT"], errors="coerce")
+        updated_df["_ultima_ts"] = updated_df["Data Ultima FT"].apply(parse_any_date)
+        updated_df["_prossima_ts"] = updated_df["Data Prossima FT"].apply(parse_any_date)
 
         errors = []
         updated_count = 0
 
-        for _, row in updated_df.iterrows():
-            cid = int(row["ID"])
-            cont = db.session.get(Contract, cid)
-            if not cont:
-                errors.append(f"⚠️ Contract ID {cid} not found.")
-                continue
+        try:
+            db.session.expire_all()  # Ensures session fetches fresh data
 
-            ts = row["_ultima_ts"]
-            if pd.isna(ts):
-                cont.data_ultima_ft = None
-                cont.data_prox_ft = None
-            else:
-                d = ts.date()
-                cont.data_ultima_ft = d
-                cont.data_prox_ft = d.replace(year=d.year + 1)
+            for _, row in updated_df.iterrows():
+                cid = int(row["ID"])
+                cont = db.session.get(Contract, cid)
+                if not cont:
+                    errors.append(f"⚠️ Contract ID {cid} not found.")
+                    continue
 
-            updated_count += 1
+                ultima = row["_ultima_ts"]
+                prossima = row["_prossima_ts"]
 
-        if updated_count:
+                cont.data_ultima_ft = ultima.date() if pd.notna(ultima) else None
+                cont.data_prox_ft   = prossima.date() if pd.notna(prossima) else None
+                updated_count += 1
+
             db.session.commit()
             st.success(f"✅ Salvati {updated_count} contratto/i correttamente.")
             st.rerun()
-        else:
-            st.info("ℹ️ Nessuna modifica da salvare.")
+            
+
+        except Exception as e:
+            db.session.rollback()
+            st.error(f"❌ Errore durante il salvataggio: {e}")
 
         for e in errors:
             st.warning(e)
@@ -726,45 +867,37 @@ if selected_tab == tabs[1]:
     if isinstance(sel, pd.DataFrame):
         sel = sel.to_dict("records")
     if sel:
+        selected_contract = sel[0]
+        file_path = selected_contract.get("Percorso File", "").strip()
         r = sel[0]
         st.info(f"📑 {r['Cliente']} – {r['Documento']}")
         c1, c2 = st.columns(2)
-        with c1:
-            if st.button("✅ Registra Fattura Oggi"):
-                c = db.session.get(Contract, int(r["ID"]))
-                if c:
-                    today = datetime.now().date()
-                    c.data_ultima_ft = today
-                    c.data_prox_ft   = today.replace(year=today.year + 1)
-                    db.session.commit()
-                    st.success("✅ Data Ultima FT aggiornata a oggi.")
+        try:
+            with c1:
+                if st.button("✅ Registra Fattura Oggi", key=f"ft_oggi_{r['ID']}"):
+                        c = db.session.get(Contract, int(r["ID"]))
+                        if c:
+                            today = datetime.now().date()
+                            c.data_ultima_ft = today
+                            c.data_prox_ft   = today.replace(year=today.year + 1)
+                            db.session.commit()
+                            st.success("✅ Data Ultima FT aggiornata a oggi.")
+                            st.rerun()
+                    
+            with c2:
+                if st.button("🔁 Modifica / Sostituisci Contratto", key=f"modifica_{r['ID']}"):
+                    st.session_state["revise_contract_id"] = int(r["ID"])
+                    st.session_state["active_tab"] = tabs[0]
                     st.rerun()
-        with c2:
-            if st.button("🔁 Modifica / Sostituisci Contratto"):
-                st.session_state["revise_contract_id"] = int(r["ID"])
-                st.session_state["active_tab"] = tabs[0]
-                st.rerun()
+            if file_path and file_path.lower().endswith(".pdf") and Path(file_path).is_file():
+                with open(file_path, "rb") as f:
+                    base64_pdf = base64.b64encode(f.read()).decode("utf-8")
 
-    # 7) Per-row actions
-    sel = grid_resp.get("selected_rows")
-    if isinstance(sel, pd.DataFrame):
-        sel = sel.to_dict("records")
-    if sel:
-        r = sel[0]
-        st.info(f"📑 {r['Cliente']} – {r['Documento']}")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("✅ Registra Fattura Oggi"):
-                cobj = db.session.get(Contract, int(r["ID"]))
-                if cobj:
-                    today = datetime.now().date()
-                    cobj.data_ultima_ft = today
-                    cobj.data_prox_ft   = today.replace(year=today.year + 1)
-                    db.session.commit()
-                    st.success("✅ Data Ultima FT aggiornata a oggi.")
-                    st.rerun()
-        with c2:
-            if st.button("🔁 Modifica / Sostituisci Contratto"):
-                st.session_state["revise_contract_id"] = int(r["ID"])
-                st.session_state["active_tab"] = tabs[0]
-                st.rerun()
+                st.markdown(f"""
+                    <iframe src="data:application/pdf;base64,{base64_pdf}" 
+                            width="100%" height="800px" type="application/pdf"></iframe>
+                """, unsafe_allow_html=True)
+            else:
+                st.warning(f"⚠️ File non trovato o non è un PDF: {file_path}")
+        finally:
+                    db.session.close()

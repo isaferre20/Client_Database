@@ -3,18 +3,37 @@ import sys
 import os
 import re
 import pandas as pd
-from streamlit_extras.switch_page_button import switch_page
 import base64
+import shutil
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
-
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../backend")))
 from client_data_backend import db, Client, Intervento, ClientDocument, app, InterventoDocument, Contract
-from navbar import navbar
+from frontend.navbar import navbar
 
 navbar()
 app.app_context().push()
 
-DOCUMENTS_FOLDER = "/Users/isabellaferrero/Politecnico Di Torino Studenti Dropbox/Isabella Ferrero/Mac/Desktop/Idraulica Baretta/Database Clienti_2/DOCUMENTAZIONE_CLIENTI"
+# Button to open IVA folder (top-right)
+with st.container():
+    col1, col2 = st.columns([1, 8])
+    with col1:
+        if st.button("📂 Apri Cartella CLIENTI", key="open_iva_folder"):
+            try:
+                import subprocess
+                iva_folder_path = "Z:\Documents\Lavori Idraulica\Isa uso ufficio\\Client_DB\\DOCUMENTAZIONE_CLIENTI"
+                if os.name == 'nt':
+                    os.startfile(iva_folder_path)
+                elif os.name == 'posix':
+                    subprocess.Popen(["open", iva_folder_path])
+            except Exception as e:
+                st.error(f"❌ Errore nell'aprire la cartella DOCUMENTAZIONE_CLIENTI: {e}")
+
+def app():
+    st.title("Clienti Page")
+
+DOCUMENTS_FOLDER = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..","..", "DOCUMENTAZIONE_CLIENTI")
+)
 
 # --- Helper Functions ---
 def is_valid_codice_fiscale(cf):
@@ -181,7 +200,7 @@ gb.configure_default_column(editable=True, resizable=True, filter=True)
 
 # Configure each column
 for col, header in column_headers.items():
-    editable = col != "id"
+    editable = col not in ["id", "nome", "cognome", "codice_fiscale"]
     if col == "sig":
         gb.configure_column(
             col,
@@ -200,6 +219,7 @@ for col, header in column_headers.items():
         )
     else:
         gb.configure_column(col, headerName=header, editable=editable)
+
 
 gb.configure_selection(selection_mode="single", use_checkbox=True)
 
@@ -282,7 +302,7 @@ if selected is not None and not selected.empty:
 
 
         # --- Tabs: Modifica | Documenti | Elimina ---
-        tab_mod, tab_docs, tab_delete = st.tabs(["✏️ Modifica Dati", "📎 Documenti", "🗑️ Elimina Cliente"])
+        tab_mod, tab_docs = st.tabs(["✏️ Modifica Dati", "📎 Documenti"])
 
         # --- MODIFICA ---
         with tab_mod:
@@ -360,6 +380,7 @@ if selected is not None and not selected.empty:
                     new_doc = ClientDocument(client_id=selected_id, doc_url=filepath)
                     db.session.add(new_doc)
                     db.session.commit()
+                    db.session.close()
                     st.success("✅ Documento caricato.")
                     st.rerun()
 
@@ -427,81 +448,3 @@ if selected is not None and not selected.empty:
                                 st.image(file_bytes, caption=filename, use_container_width=True)
                             else:
                                 st.info("⚠️ Questo tipo di file non può essere visualizzato direttamente.")
-
-        # --- ELIMINA CLIENTE ---
-        with tab_delete:
-            st.warning("⚠️ Questa azione è irreversibile. Tutti i documenti e interventi collegati saranno eliminati.")
-            interventi = Intervento.query.filter_by(client_id=selected_id).all()
-            interventi_df = pd.DataFrame([i.__dict__ for i in interventi])
-            if "_sa_instance_state" in interventi_df.columns:
-                interventi_df.drop(columns=["_sa_instance_state"], inplace=True)
-
-            if not interventi_df.empty:
-                st.markdown("#### 📋 Interventi collegati:")
-                st.dataframe(interventi_df)
-
-            if st.button("👉🏻🗑️ Conferma Eliminazione Cliente"):
-                try:
-                    db.session.expire_all()
-                    client = db.session.get(Client, int(selected_id))
-                    if client:
-                        # 1. Get client folder path
-                        folder_name = f"{client.cognome}_{client.nome}_{client.codice_fiscale}"
-                        folder_path = os.path.join(DOCUMENTS_FOLDER, safe_filename(folder_name))
-
-                        # 2. Delete all Interventi and related documents
-                        interventi = Intervento.query.filter_by(client_id=client.id).all()
-                        for intervento in interventi:
-                            # Delete associated InterventoDocuments
-                            InterventoDocument.query.filter_by(intervento_id=intervento.id).delete()
-                            # Delete Intervento itself
-                            db.session.delete(intervento)
-
-                        # 3. Attempt folder deletion
-                        import shutil
-                        if os.path.exists(folder_path):
-                            try:
-                                shutil.rmtree(folder_path)
-                                st.info(f"🗂️ Cartella del cliente {client.nome} {client.cognome} eliminata.")
-                            except Exception as e:
-                                st.warning(f"⚠️ Cliente e interventi eliminati, ma la cartella non è stata rimossa: {e}")
-                        
-                        # 4. Delete Contracts and related files
-                        contracts = Contract.query.filter_by(client_id=client.id).all()
-                        for contract in contracts:
-                            try:
-                                # Delete PDF
-                                if contract.contract_url and os.path.exists(contract.contract_url):
-                                    os.remove(contract.contract_url)
-                                    st.info(f"📄 Contratto PDF eliminato: {contract.contract_url}")
-
-                                # Delete DOCX with same filename if exists
-                                docx_path = contract.contract_url.replace(".pdf", ".docx")
-                                if os.path.exists(docx_path):
-                                    os.remove(docx_path)
-                                    st.info(f"📄 Contratto DOCX eliminato: {docx_path}")
-
-                                # Delete symlink or copy in DOCUMENTAZIONE_CLIENTI/<cliente>/CONTRATTI/
-                                contratti_folder = os.path.join(folder_path, "CONTRATTI")
-                                if os.path.exists(contratti_folder):
-                                    link_path = os.path.join(contratti_folder, os.path.basename(contract.contract_url))
-                                    if os.path.exists(link_path):
-                                        os.remove(link_path)
-                                        st.info(f"🔗 Collegamento al contratto eliminato: {link_path}")
-                                
-                                # Delete the contract row from DB
-                                db.session.delete(contract)
-                                st.info(f"🗂️ Contratto con ID {contract.id} eliminato dal DB.")
-
-                            except Exception as e:
-                                st.warning(f"⚠️ Errore durante l'eliminazione del contratto: {e}")
-
-                        # 5. Delete the client
-                        db.session.delete(client)
-                        db.session.commit()
-
-                        st.success(f"✅ Cliente {client.nome} {client.cognome}, interventi, documenti e cartella eliminati.")
-                        st.rerun()
-
-                except Exception as e:
-                    st.error(f"❌ Errore durante l'eliminazione: {e}")

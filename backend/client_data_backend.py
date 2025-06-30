@@ -6,20 +6,28 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from backend.db import SessionLocal
 
+
+db = SQLAlchemy()  # define only once
+
 app = Flask(__name__)
+
+# Setup database path
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+db_path = r'Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\client_database.db'
+
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:////Users/isabellaferrero/Politecnico Di Torino Studenti Dropbox/Isabella Ferrero/Mac/Desktop/Idraulica Baretta/Database Clienti_3/instance/clients.db"
+
+db.init_app(app)  # bind once
 
 # === FILE UPLOAD CONFIG ===
-UPLOAD_FOLDER = 'uploads'
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-db = SQLAlchemy(app)
-
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
-    return send_from_directory('static/uploads', filename)
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 
 # === MODELS ===
@@ -176,14 +184,20 @@ def serve_document(doc_id):
 
 # === HELPER FUNCTIONS ===
 def get_clients_by_search(query):
-    return Client.query.filter(
-        (Client.nome.ilike(f"%{query}%")) |
-        (Client.cognome.ilike(f"%{query}%")) |
-        (Client.codice_fiscale.ilike(f"%{query}%"))
-    ).all()
+    try:
+        return Client.query.filter(
+            (Client.nome.ilike(f"%{query}%")) |
+            (Client.cognome.ilike(f"%{query}%")) |
+            (Client.codice_fiscale.ilike(f"%{query}%"))
+        ).all()
+    finally:
+        db.session.close()
 
 def get_interventi_by_client_id(client_id):
-    return Intervento.query.filter_by(client_id=client_id).all()
+    try:
+        return Intervento.query.filter_by(client_id=client_id).all()
+    finally:
+            db.session.close()
 
 if __name__ == '__main__':
     with app.app_context():

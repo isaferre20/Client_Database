@@ -2,7 +2,12 @@ import streamlit as st
 import os
 import base64
 from streamlit_extras.switch_page_button import switch_page
-from navbar import navbar
+import sys
+import os
+
+# Add path to CLIENT_DB so Python can find Client_Database package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from  frontend.navbar import navbar
 navbar()
 
 # --- Load Images ---
@@ -11,11 +16,11 @@ def load_base64_image(path):
         return base64.b64encode(f.read()).decode()
 
 # --- Paths ---
-iva_icon_path = "templates_docs/iva_icon.png"
-conformita_icon_path = "templates_docs/conformity.png"
-contratti_icon_path = "templates_docs/contract.png"
-certificati_icon_path = "templates_docs/certificate.png"
-altro_icon_path = "templates_docs/docs.png"
+iva_icon_path = "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\Client_Database\\templates_docs\\iva_icon.png"
+conformita_icon_path = "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\Client_Database\\templates_docs\\conformity.png"
+contratti_icon_path = "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\Client_Database\\templates_docs\\contract.png"
+certificati_icon_path = "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\Client_Database\\templates_docs\\certificate.png"
+altro_icon_path = "Z:\\Documents\\Lavori Idraulica\\Isa uso ufficio\\Client_DB\\Client_Database\\templates_docs\\docs.png"
 
 # --- Load Images ---
 iva_icon_b64 = load_base64_image(iva_icon_path)
@@ -26,14 +31,14 @@ altro_icon_b64 = load_base64_image(altro_icon_path)
 
 # Group top and bottom rows
 top_row = [
-    ("Dichiarazioni IVA", iva_icon_b64, "iva_page"),
-    ("Dichiarazioni Conformità", conformita_icon_b64, "DICO_page"),
-    ("Contratti", contratti_icon_b64, "contratti_page"),
+    ("Dichiarazioni IVA", iva_icon_b64, "pages/iva_page.py"),
+    ("Dichiarazioni Conformità", conformita_icon_b64, "pages/DICO_page.py"),
+    ("Contratti", contratti_icon_b64, "pages/contratti_page.py"),
 ]
 
 bottom_row = [
-    ("Certificati", certificati_icon_b64, "certificati_page"),
-    ("Altro", altro_icon_b64, "altro_page"),
+    ("Certificati", certificati_icon_b64, "pages/certificati_page.py"),
+    ("Altro", altro_icon_b64, "pages/altro_page.py"),
 ]
 
 # --- CSS ---
@@ -123,7 +128,7 @@ def clickable_card(label, img_b64, target_page, key):
     st.markdown("</div></div>", unsafe_allow_html=True)
 
     if button_clicked:
-        switch_page(target_page)
+        st.switch_page(target_page)
 
 
 # --- First row (3 cards) ---

@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+
+# Env
+env/
+.venv/
+
+# VS Code
+.vscode/
+
+# Streamlit
+.streamlit/
+
+# PyInstaller
+*.spec
+dist/
+build/
